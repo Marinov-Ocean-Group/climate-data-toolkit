@@ -14,22 +14,6 @@ This repository contains a collection of Python functions designed to streamline
 - Pandas
 - xarray
 
-
-## Quick Start
-
-```python
-from climate_processing import load_data, clean_data, analyze_trends
-
-# Load climate model data
-data = load_data('path/to/data.nc')
-
-# Clean and process
-cleaned_data = clean_data(data)
-
-# Analyze trends
-results = analyze_trends(cleaned_data)
-```
-
 ## Project Structure
 
 ```
