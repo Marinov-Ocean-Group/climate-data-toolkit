@@ -7,22 +7,46 @@ access, and Dask cluster setup.
 All functions that touch the filesystem or a remote data store live here.
 """
 
-import os
 import glob
+import logging
 import pickle
 from pathlib import Path
-from typing import Optional, Dict
+from typing import Any, Dict, Optional, Union
 
-import numpy as np
-import pandas as pd
 import xarray as xr
+
+from .config import get_ncar_catalog_url, get_pbs_cluster_defaults
+
+logger = logging.getLogger(__name__)
+
+PathLike = Union[str, Path]
+
+__all__ = [
+    "pickle_exists",
+    "load_pickle",
+    "save_pickle",
+    "load_netcdf_files",
+    "load_netcdf_by_month",
+    "select_month",
+    "save_monthly_temp_files",
+    "load_model_netcdf",
+    "load_zarr_from_gcs",
+    "filter_cmip_catalog",
+    "load_from_ncar_catalog",
+    "start_pbs_dask_cluster",
+]
+
+
+def _pickle_path(name: str, base_path: PathLike) -> Path:
+    """Return ``<base_path>/<name>.pickle``."""
+    return Path(base_path) / f"{name}.pickle"
 
 
 # ---------------------------------------------------------------------------
 # Pickle helpers
 # ---------------------------------------------------------------------------
 
-def pickle_exists(name: str, base_path: str) -> bool:
+def pickle_exists(name: str, base_path: PathLike) -> bool:
     """
     Check whether a pickle file exists on disk.
 
@@ -30,43 +54,31 @@ def pickle_exists(name: str, base_path: str) -> bool:
     ----------
     name : str
         Filename stem (no extension).
-    base_path : str
-        Directory path (with trailing slash) where the file would live.
-
-    Returns
-    -------
-    bool
-        ``True`` if ``<base_path><name>.pickle`` exists.
+    base_path : str or Path
+        Directory where the file would live.
     """
-    path = base_path + name + ".pickle"
-    return os.path.exists(path)
+    return _pickle_path(name, base_path).is_file()
 
 
-def load_pickle(name: str, base_path: str):
+def load_pickle(name: str, base_path: PathLike) -> Any:
     """
     Load and return the contents of a pickle file.
+
+    Only load pickles you created with :func:`save_pickle`.
 
     Parameters
     ----------
     name : str
         Filename stem (no extension).
-    base_path : str
-        Directory containing the pickle file (with trailing slash).
-
-    Returns
-    -------
-    object
-        Deserialised Python object stored in the pickle.
-
-    Example
-    -------
-    >>> data = load_pickle("model_output", "/data/processed/")
+    base_path : str or Path
+        Directory containing the pickle file.
     """
-    path = base_path + name + ".pickle"
-    return pd.read_pickle(path)
+    path = _pickle_path(name, base_path)
+    with open(path, "rb") as f:
+        return pickle.load(f)
 
 
-def save_pickle(name: str, base_path: str, obj) -> None:
+def save_pickle(name: str, base_path: PathLike, obj: Any) -> None:
     """
     Serialise *obj* and save it as a pickle file.
 
@@ -74,12 +86,13 @@ def save_pickle(name: str, base_path: str, obj) -> None:
     ----------
     name : str
         Filename stem (no extension).
-    base_path : str
-        Directory in which to write the file (with trailing slash).
+    base_path : str or Path
+        Directory in which to write the file.
     obj : object
         Python object to serialise.
     """
-    path = base_path + name + ".pickle"
+    path = _pickle_path(name, base_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "wb") as f:
         pickle.dump(obj, f, pickle.HIGHEST_PROTOCOL)
 
@@ -120,6 +133,11 @@ def load_netcdf_files(file_list: list[str]) -> xr.Dataset:
         ds = xr.open_mfdataset(file_list, use_cftime=True)
     return _drop_type_coord(ds)
 
+def select_month(ds: xr.Dataset|xr.DataArray, n: int, time_dim: str = "time") -> xr.Dataset|xr.DataArray:
+    """Select a specific calendar month from a dataset."""
+    if time_dim not in ds.dims:
+        raise ValueError(f"Time dimension {time_dim} not found in dataset.")
+    return ds.isel({time_dim: (ds[time_dim].dt.month == n)})
 
 def load_netcdf_by_month(file_list: list[str], month: int) -> xr.Dataset:
     """
@@ -139,19 +157,17 @@ def load_netcdf_by_month(file_list: list[str], month: int) -> xr.Dataset:
     -------
     xarray.Dataset
     """
-    def _select_month(ds: xr.Dataset, n: int) -> xr.Dataset:
-        return ds.isel(time=(ds.time.dt.month == n))
 
     if len(file_list) > 5:
         ds = xr.open_mfdataset(file_list[0], use_cftime=True)
-        ds = _select_month(ds, month)
+        ds = select_month(ds, month)
         for path in file_list[1:]:
             ds0 = xr.open_mfdataset(path, use_cftime=True)
-            ds0 = _select_month(ds0, month)
+            ds0 = select_month(ds0, month)
             ds = xr.concat([ds, ds0], dim="time")
     else:
         ds = xr.open_mfdataset(file_list, use_cftime=True, chunks={"time": 12})
-        ds = _select_month(ds, month)
+        ds = select_month(ds, month)
 
     return _drop_type_coord(ds)
 
@@ -287,7 +303,7 @@ def filter_cmip_catalog(cat, **kwargs):
 
 
 def load_from_ncar_catalog(
-    url: str = "/glade/collections/cmip/catalog/intake-esm-datastore/catalogs/glade-cmip6.json",
+    url: str | None = None,
     show_only: bool = False,
     target_chunks: Optional[Dict[str, int]] = None,
     **kwargs,
@@ -314,6 +330,10 @@ def load_from_ncar_catalog(
         or ``None`` if no data matched the query.
     """
     import intake
+
+    if url is None:
+        url = get_ncar_catalog_url()
+
     cat = intake.open_esm_datastore(url)
     cat_subset = filter_cmip_catalog(cat, **kwargs)
 
@@ -321,7 +341,7 @@ def load_from_ncar_catalog(
         return cat_subset.df
 
     if cat_subset.df.empty:
-        print("No data found for the specified query.")
+        logger.warning("No data found for the specified query.")
         return None
 
     if target_chunks is None:
@@ -349,11 +369,21 @@ def load_from_ncar_catalog(
 # Dask cluster
 # ---------------------------------------------------------------------------
 
-def start_pbs_dask_cluster():
+def start_pbs_dask_cluster(
+    *,
+    queue: str | None = None,
+    walltime: str | None = None,
+    log_directory: str | None = None,
+    minimum: int | None = None,
+    maximum: int | None = None,
+    local_directory: str | None = None,
+):
     """
     Start a PBS-backed Dask cluster on NCAR's Casper system.
 
-    The cluster adapts dynamically between 2 and 80 workers.
+    Defaults come from :mod:`climate_data_toolkit.config` and can be
+    overridden via keyword arguments or environment variables
+    (``CDT_PBS_*``).
 
     Returns
     -------
@@ -363,19 +393,23 @@ def start_pbs_dask_cluster():
     from dask_jobqueue import PBSCluster
     from dask.distributed import Client
 
+    defaults = get_pbs_cluster_defaults()
     cluster = PBSCluster(
         job_name="dask",
-        queue="casper",
-        walltime="20:00:00",
-        log_directory="dask-logs",
+        queue=queue or defaults["queue"],
+        walltime=walltime or defaults["walltime"],
+        log_directory=log_directory or defaults["log_directory"],
         cores=1,
         memory="8GiB",
         resource_spec="select=1:ncpus=1:mem=8GB",
         processes=1,
-        local_directory="${SCRATCH}/dask_scratch/pbs.$PBS_JOBID/dask/spill",
+        local_directory=local_directory or defaults["local_directory"],
         interface="ext",
         silence_logs="error",
     )
-    cluster.adapt(minimum=2, maximum=80)
+    cluster.adapt(
+        minimum=minimum if minimum is not None else defaults["minimum"],
+        maximum=maximum if maximum is not None else defaults["maximum"],
+    )
     client = Client(cluster)
     return client, cluster

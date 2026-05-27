@@ -10,6 +10,14 @@ mixed-layer depth calculation, and depth-unit conversion.
 import numpy as np
 import xarray as xr
 
+__all__ = [
+    "find_ice_edge",
+    "mask_land_pixels",
+    "fill_ocean_with_zero",
+    "detect_polynya",
+    "compute_polynya_area_stats",
+]
+
 
 # ---------------------------------------------------------------------------
 # Sea-ice edge / boundary helpers
@@ -52,6 +60,9 @@ def mask_land_pixels(ds: xr.Dataset) -> xr.Dataset:
     (e.g. GISS, INM-CM4-8).  The flood fill propagates from the top-left
     corner to identify the continental mask.
 
+    The land mask is derived from a single representative time slice (the
+    first time step).  This assumes the land mask does not vary in time.
+
     Parameters
     ----------
     ds : xr.Dataset
@@ -65,16 +76,16 @@ def mask_land_pixels(ds: xr.Dataset) -> xr.Dataset:
     from skimage.segmentation import flood_fill
 
     ice = ds.siconc
-    land_mask = None
-    for t in ice.time:
-        ice_slice = ice.sel(time=t).values
-        filled = flood_fill(ice_slice, (0, 0), np.nan, tolerance=0)
-        if np.isnan(filled[-1, -1]):
-            land_mask = np.isnan(filled)
-            break
+    if "time" in ice.dims:
+        ice_slice = ice.isel(time=0).values
+    else:
+        ice_slice = ice.values
 
-    if land_mask is None:
+    filled = flood_fill(ice_slice, (0, 0), np.nan, tolerance=0)
+    if not np.isnan(filled[-1, -1]):
         return ds  # could not determine mask; return unchanged
+
+    land_mask = np.isnan(filled)
 
     mask_da = xr.DataArray(
         data=land_mask,
@@ -240,77 +251,3 @@ def compute_polynya_area_stats(
     area_mean  = float(ds.areacello.where(count > 0).sum(spatial_dims).mean().values)
     return [area_total, area_max, area_mean]
 
-
-# ---------------------------------------------------------------------------
-# Mixed-layer depth
-# ---------------------------------------------------------------------------
-
-def convert_depth_to_meters(da: xr.DataArray, depth_dim: str = "lev") -> xr.DataArray:
-    """
-    Convert the depth coordinate of *da* from centimetres to metres if
-    its ``units`` attribute indicates centimetres.
-
-    Parameters
-    ----------
-    da : xr.DataArray
-    depth_dim : str
-        Name of the depth dimension.
-
-    Returns
-    -------
-    xr.DataArray
-        *da* with the depth coordinate rescaled if necessary.
-    """
-    if "units" in da[depth_dim].attrs:
-        if da[depth_dim].attrs["units"] == "centimeters":
-            da[depth_dim] = da[depth_dim] / 100.0
-    return da
-
-
-def compute_mixed_layer_depth(
-    sigma0: xr.DataArray,
-    depth_dim: str = "lev",
-) -> xr.DataArray:
-    """
-    Calculate mixed-layer depth (MLD) from a potential density profile.
-
-    The MLD is defined as the shallowest depth where
-    ``σ₀(z) − σ₀(10 m) ≥ 0.03 kg m⁻³``.  A linear interpolation refines
-    the estimate between the last satisfying level and the next one.  When
-    the criterion is never exceeded the ocean-bottom depth is returned.
-
-    Parameters
-    ----------
-    sigma0 : xr.DataArray
-        Potential density anomaly (σ₀) with a depth dimension.
-    depth_dim : str
-        Name of the vertical dimension (default ``"lev"``).
-
-    Returns
-    -------
-    xr.DataArray
-        MLD in the same units as *depth_dim* (metres if
-        :func:`convert_depth_to_meters` has been applied).
-    """
-    # Deepest wet level (bottom topography)
-    bottom = sigma0[depth_dim].where(~sigma0.isnull()).max(dim=depth_dim)
-
-    sigma_10 = sigma0.interp({depth_dim: 10})
-
-    # Deepest level where the density criterion is not yet met
-    mld_shallow = sigma0[depth_dim].where(sigma0 - sigma_10 < 0.03).max(dim=depth_dim)
-    # First level where criterion IS met
-    mld_deep    = sigma0[depth_dim].where(sigma0[depth_dim] > mld_shallow).min(depth_dim)
-
-    rho_shallow = sigma0.where(sigma0[depth_dim] >= mld_shallow).min(depth_dim)
-    rho_deep    = sigma0.where(sigma0[depth_dim] >= mld_deep).min(depth_dim)
-
-    # Linear interpolation to the 0.03 threshold
-    mld_interp = (
-        (mld_deep - mld_shallow) / (rho_deep - rho_shallow)
-        * (sigma_10 + 0.03 - rho_shallow)
-        + mld_shallow
-    )
-
-    # Cap at ocean bottom where criterion is never exceeded
-    return xr.where(mld_shallow >= bottom, bottom, mld_interp)

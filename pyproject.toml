@@ -1,0 +1,67 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "climate-data-toolkit"
+version = "0.1.0"
+description = "Climate model data processing and analysis for sea ice, spectra, and grids"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.12"
+authors = [{ name = "Shunzi Lu" }]
+keywords = ["climate", "xarray", "cmip", "sea-ice", "spectral-analysis"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Atmospheric Science",
+]
+dependencies = [
+    "numpy",
+    "pandas",
+    "xarray",
+    "scipy",
+    "pyproj",
+    "gsw",
+]
+
+[project.optional-dependencies]
+plot = [
+    "matplotlib",
+    "cartopy",
+    "cmocean",
+    "adjusttext",
+]
+regrid = ["xesmf"]
+ice = ["scikit-image"]
+cloud = ["gcsfs", "zarr"]
+catalog = ["intake", "intake-esm"]
+hpc = ["dask", "distributed", "dask-jobqueue"]
+all = [
+    "matplotlib",
+    "cartopy",
+    "cmocean",
+    "adjusttext",
+    "xesmf",
+    "scikit-image",
+    "gcsfs",
+    "zarr",
+    "intake",
+    "intake-esm",
+    "dask",
+    "distributed",
+    "dask-jobqueue",
+]
+
+[project.urls]
+Repository = "https://github.com/shunzlu/climate-data-toolkit"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["climate_data_toolkit*"]
+
+[tool.setuptools.package-data]
+climate_data_toolkit = ["py.typed"]

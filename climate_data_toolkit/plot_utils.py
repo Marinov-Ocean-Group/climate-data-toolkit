@@ -9,8 +9,8 @@ Merges the content of the original ``plotfunctions.py`` and
 ``PlotFunctions2`` files into a single, deduplicated module.
 """
 
-import gc
 import numpy as np
+from pathlib import Path
 import matplotlib.pyplot as plt
 import matplotlib.path as mpath
 import matplotlib.colors as mcolors
@@ -104,6 +104,7 @@ def style_south_polar_map(
     ax,
     grid: bool = True,
     grid_labels: bool = True,
+    north_boundary: float = -50,
 ) -> None:
     """
     Apply standard Southern Ocean styling to a polar stereographic axes.
@@ -117,9 +118,11 @@ def style_south_polar_map(
     grid : bool
         Draw gridlines.
     grid_labels : bool
-        Annotate gridlines with latitude labels.
+        Annotate gridlines with latitude labels.    
+    north_boundary : float
+        Latitude of the northern boundary of the plot.
     """
-    ax.set_extent([-180, 180, -90, -50], ccrs.PlateCarree())
+    ax.set_extent([-180, 180, -90, north_boundary], ccrs.PlateCarree())
     ax.add_feature(cfeature.LAND, zorder=1, color="grey")
     ax.add_feature(cfeature.OCEAN, alpha=0.15)
     ax.set_boundary(create_circle(), transform=ax.transAxes)
@@ -132,6 +135,7 @@ def style_south_polar_map(
             linestyle="-.",
             linewidth=0.5,
             alpha=0.8,
+            rotate_labels=False
         )
 
 
@@ -635,7 +639,8 @@ def plot_polynya_maps(
     show_resolution: bool = False,
     lighten: float = 1.0,
     figsize: tuple = (6.5, 7.5),
-    save_prefix: str = "Figures/polynya_maps_",
+    output_dir: str | Path = "Figures",
+    save_prefix: str | None = None,
 ) -> None:
     """
     Multi-panel Southern Ocean map figure showing sea-ice max and polynya
@@ -654,8 +659,19 @@ def plot_polynya_maps(
     show_resolution : bool
     lighten : float
     figsize : tuple
-    save_prefix : str
+    output_dir : str or Path
+        Directory for the output PNG (created if missing).
+    save_prefix : str or None
+        Deprecated alias for the filename stem inside *output_dir*.
+        If given, overrides the default ``polynya_maps_<threshold>``.
     """
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    if save_prefix is not None:
+        out_path = Path(save_prefix + f"{ice_threshold}.png")
+    else:
+        out_path = out_dir / f"polynya_maps_{ice_threshold}.png"
+
     fig = plt.figure(figsize=figsize)
     n = 0
     color_dict = build_color_map(color_palette, list(model_df[type_column].unique()), lighten)
@@ -670,12 +686,11 @@ def plot_polynya_maps(
         im, im2 = add_subplot_icepolynya(
             fig, n, name, color_dict[category], title_only,
             reso_text, pltx, plty, plt_icemax, plt_polynya, time_length)
-        gc.collect()
 
     add_cbars(fig, im, im2)
     add_type_color_legend(fig, color_dict, "sea ice module types")
     fig.text(0.15, 0.06, f"{ice_threshold}%")
-    fig.savefig(f"{save_prefix}{ice_threshold}.png", dpi=300)
+    fig.savefig(out_path, dpi=300)
 
 
 def plot_polynya_maps_from_precomputed(
@@ -688,7 +703,8 @@ def plot_polynya_maps_from_precomputed(
     show_resolution: bool = False,
     lighten: float = 1.0,
     figsize: tuple = (6.5, 7),
-    save_path: str = "polynya_maps.png",
+    output_dir: str | Path = ".",
+    save_path: str | None = None,
 ) -> None:
     """
     Multi-panel polynya map figure using pre-detected polynya data loaded
@@ -705,9 +721,15 @@ def plot_polynya_maps_from_precomputed(
     show_resolution : bool
     lighten : float
     figsize : tuple
-    save_path : str
+    output_dir : str or Path
+        Directory for the output PNG when *save_path* is not set.
+    save_path : str or None
+        Full output path.  Defaults to ``<output_dir>/polynya_maps.png``.
     """
-    import xarray as xr
+    if save_path is None:
+        save_path = str(Path(output_dir) / "polynya_maps.png")
+    Path(save_path).parent.mkdir(parents=True, exist_ok=True)
+
     fig = plt.figure(figsize=figsize)
     n = 0
     color_dict = build_color_map(color_palette, list(model_df[type_column].unique()), lighten)
@@ -731,7 +753,6 @@ def plot_polynya_maps_from_precomputed(
         im, im2 = add_subplot_icepolynya(
             fig, n, name, color_dict[category], title_only,
             reso_text, pltx, plty, plt_icemax, plt_polynya, time_length)
-        gc.collect()
 
     add_cbars(fig, im, im2)
     add_type_color_legend(fig, color_dict, "sea ice module types")
@@ -749,7 +770,8 @@ def plot_convection_maps(
     show_resolution: bool = True,
     lighten: float = 1.0,
     figsize: tuple = (6.5, 7),
-    save_path: str = "convection_maps.png",
+    output_dir: str | Path = ".",
+    save_path: str | None = None,
 ) -> None:
     """
     Multi-panel deep-convection frequency map figure.
@@ -767,9 +789,17 @@ def plot_convection_maps(
     show_resolution : bool
     lighten : float
     figsize : tuple
-    save_path : str
+    output_dir : str or Path
+        Directory for the output PNG when *save_path* is not set.
+    save_path : str or None
+        Full output path.  Defaults to ``<output_dir>/convection_maps.png``.
     """
     import cmocean
+
+    if save_path is None:
+        save_path = str(Path(output_dir) / "convection_maps.png")
+    Path(save_path).parent.mkdir(parents=True, exist_ok=True)
+
     fig = plt.figure(figsize=figsize)
     n = 0
     color_dict = build_color_map(color_palette, list(model_df[type_column].unique()), lighten)
@@ -801,7 +831,6 @@ def plot_convection_maps(
                            vmin=0, vmax=0.2,
                            transform=ccrs.PlateCarree(),
                            cmap=plt.cm.plasma)
-        gc.collect()
 
     add_cbar(fig, [0.62, 0.08, 0.35, 0.01], im, "Frequency of occurrence",
              format_percent=True)

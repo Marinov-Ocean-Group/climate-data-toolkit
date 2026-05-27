@@ -55,6 +55,8 @@ __all__ = [
     "compute_lagged_correlation",
     "figures_dir",
     "output_csv",
+    "calculate_anomalies",
+    "boxcar_smooth",
 ]
 
 
@@ -91,19 +93,46 @@ def to_numpy(da) -> np.ndarray:
     return values[np.isfinite(values)]
 
 
-def normalize_data(data: np.ndarray) -> np.ndarray:
+def normalize_data(
+    data: np.ndarray | xr.DataArray,
+    t: str = "time",
+) -> np.ndarray | xr.DataArray:
     """
-    Standardise *data* to zero mean and unit variance (ignoring NaNs).
+    Normalize data to zero mean and unit variance.
 
     Parameters
     ----------
-    data : array-like
+    data : np.ndarray or xr.DataArray
+        Input data to normalize.
+
+    t : str, default="time"
+        Dimension name used for normalization when `data`
+        is an xarray DataArray.
 
     Returns
     -------
-    np.ndarray
+    np.ndarray or xr.DataArray
+        Normalized data with approximately zero mean and unit variance.
     """
-    return (data - np.nanmean(data)) / np.nanstd(data)
+    if isinstance(data, np.ndarray):
+        # Compute NaN-safe global statistics
+        mean = np.nanmean(data)
+        std = np.nanstd(data)
+        # Standardize data
+        normalized_data = (data - mean) / std
+        return normalized_data
+    elif isinstance(data, xr.DataArray):
+        # Compute statistics along the specified dimension
+        mean = data.mean(dim=t)
+        std = data.std(dim=t)
+        # Standardize data
+        normalized_data = (data - mean) / std
+        return normalized_data
+    else:
+        raise TypeError(
+            f"Unsupported input type: {type(data)}. "
+            "Expected np.ndarray or xr.DataArray."
+        )
 
 
 def create_index(
@@ -127,9 +156,9 @@ def create_index(
     -------
     xr.DataArray
     """
+    if rename_time_dim is not None:
+        heat_content = heat_content.rename({heat_content.dims[0]: rename_time_dim})
     index = -normalize_data(heat_content)
-    if rename_time_dim:
-        index = index.rename({index.dims[0]: rename_time_dim})
     return index
 
 
@@ -422,6 +451,69 @@ def calculate_dominant_periods(
 
     return results
 
+# ---------------------------------------------------------------------------
+# Boxcar filtering
+# ---------------------------------------------------------------------------
+
+def boxcar_smooth(da: xr.DataArray, width: int, dim: str = "time") -> xr.DataArray:
+    """
+    Apply a boxcar filter to an xarray DataArray.
+    
+    Parameters
+    ----------
+    da : xr.DataArray
+    width : int
+        The half-width of the smoothing window.
+    dim : str
+        The dimension to smooth over.
+    
+    Returns
+    -------
+    xr.DataArray
+        The smoothed DataArray.
+    """
+    window = 2 * width + 1
+    padded = da.pad({dim: width}, mode="edge")
+    smoothed = (
+        padded
+        .rolling({dim: window}, center=True)
+        .mean()
+    )
+    return smoothed.isel({dim: slice(width, -width)})
+
+
+def calculate_anomalies(da: xr.DataArray, t: str = "time", timecut: bool = True, norm: bool = False, smooth: bool = True) -> xr.DataArray:
+    """
+    Calculate anomalies from a data array.
+    
+    Parameters
+    ----------
+    da : xr.DataArray
+    t : str
+        The time dimension name.
+    timecut : bool
+        Whether to cut the data to the last 500 time steps.
+    norm : bool
+        Whether to normalize the data.
+    smooth : bool
+        Whether to smooth the data.
+    
+    Returns
+    -------
+    xr.DataArray
+        The anomalies.
+    """
+    if timecut:
+        da = da.isel({t: slice(-500, None)})
+    if smooth:
+        da = boxcar_smooth(da, 10, t)
+    if norm:
+        anom = normalize_data(da, t)
+    else:
+        da_dimmean = da.mean(t)
+        anom = da - da_dimmean
+    return anom
+
 
 # ---------------------------------------------------------------------------
 # Butterworth filtering
@@ -621,6 +713,9 @@ def compute_lagged_correlation(
              for var in y_rolling.data_vars}
         )
     return xr.corr(y_rolling, x_window, dim=time_dim)
+
+
+
 
 
 # ---------------------------------------------------------------------------

@@ -10,6 +10,43 @@ import xarray as xr
 import pandas as pd
 from pyproj import Geod
 
+__all__ = [
+    "get_latlon",
+    "fill_missing_coordinates",
+    "compute_grid_area_from_bounds",
+    "compute_grid_area_from_vertices",
+    "load_cell_area",
+    "build_dataset",
+    "drop_non_dim_coords",
+    "copy_latlon_coords",
+    "rename_spatial_dims",
+    "copy_spatial_coords",
+    "regrid_data",
+    "regrid_to_target_grid",
+    "flip_latitude",
+    "shift_longitude_origin",
+    "roll_longitude_axis",
+]
+
+_REGRIDDER_CACHE: dict[tuple, object] = {}
+
+
+def _regridder_cache_key(ds_in, ds_out) -> tuple:
+    """Build a hashable key from source and target grid coordinate arrays."""
+    def _coord_tuple(ds, dim):
+        if dim not in ds:
+            return (dim, None, None)
+        val = ds[dim]
+        arr = np.asarray(val.values if hasattr(val, "values") else val)
+        return (dim, arr.shape, arr.tobytes())
+
+    keys = []
+    for ds in (ds_in, ds_out):
+        dims = sorted(ds.keys()) if isinstance(ds, dict) else sorted(ds)
+        for dim in dims:
+            keys.append(_coord_tuple(ds, dim))
+    return tuple(keys)
+
 
 # ---------------------------------------------------------------------------
 # Latitude / longitude extraction
@@ -426,6 +463,7 @@ def regrid_data(
     da: xr.DataArray,
     ds_in: xr.Dataset,
     ds_out: xr.Dataset,
+    reuse: bool = True,
 ) -> xr.DataArray:
     """
     Regrid *da* from the source grid *ds_in* to *ds_out* using bilinear
@@ -439,13 +477,25 @@ def regrid_data(
         Source grid descriptor.
     ds_out : xr.Dataset
         Target grid descriptor.
+    reuse : bool
+        If ``True`` (default), cache and reuse the xESMF Regridder for
+        identical grid pairs.  Set ``False`` for one-off regrids.
 
     Returns
     -------
     xr.DataArray
     """
     import xesmf as xe
-    regridder = xe.Regridder(ds_in, ds_out, "bilinear", periodic=True)
+
+    if reuse:
+        key = _regridder_cache_key(ds_in, ds_out)
+        regridder = _REGRIDDER_CACHE.get(key)
+        if regridder is None:
+            regridder = xe.Regridder(ds_in, ds_out, "bilinear", periodic=True)
+            _REGRIDDER_CACHE[key] = regridder
+    else:
+        regridder = xe.Regridder(ds_in, ds_out, "bilinear", periodic=True)
+
     return regridder(da)
 
 

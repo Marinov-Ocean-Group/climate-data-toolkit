@@ -1,0 +1,58 @@
+# Climate Data Toolkit — full conda-forge environment
+#
+# Create (from this repo root):
+#   mamba env create -f environment.yml
+#   conda activate cdt
+#
+# Refresh an existing environment:
+#   mamba env update -f environment.yml --prune
+#
+# All runtime dependencies are installed from conda-forge.
+# pip installs only this package in editable mode (no pip dependency resolution).
+
+name: cdt
+channels:
+  - conda-forge
+channel_priority: strict
+
+dependencies:
+  - python
+  - ipykernel
+
+  # core
+  - numpy
+  - pandas
+  - xarray
+  - scipy
+  - pyproj
+  - gsw
+
+  # plot
+  - matplotlib
+  - cartopy
+  - cmocean
+  - adjusttext
+
+  # regrid
+  - xesmf
+
+  # ice
+  - scikit-image
+
+  # cloud
+  - zarr
+  - gcsfs
+
+  # catalog
+  - intake
+  - intake-esm
+
+  # hpc
+  - dask
+  - distributed
+  - dask-jobqueue
+  - dask-labextension
+
+  - pip
+  - pip:
+      - -e .
